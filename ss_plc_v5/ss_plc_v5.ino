@@ -1,122 +1,56 @@
 #include <PID_v1_bc.h>
 
 // =============================
-// PWM @ 30 Hz (retain original behavior)
-// =============================
-void setPWM_30Hz() {
-  // Fast PWM 8-bit, prescaler = 1024
-  TCCR1A = _BV(COM1A1) | _BV(WGM10);
-  TCCR1B = _BV(WGM12) | _BV(CS12) | _BV(CS10);
-}
-
-// =============================
 // CONFIGURATION
 // =============================
-const int FAN_PIN = 9;        
-const unsigned long POLL_INTERVAL_MS = 250;  
-const unsigned long SUPERVISOR_TIMEOUT_MS = 2000; 
-const unsigned long PID_INTERVAL_MS = 100;      // 10 Hz PID loop
+const int FAN_PIN = 9;
+const unsigned long SUPERVISOR_TIMEOUT_MS = 2000; // 2 sec timeout
+const unsigned long GET_INTERVAL_MS = 1000;       // min interval between GETs
 
-unsigned long lastPoll = 0;
+// Supervisor state tracking
 unsigned long lastSupervisorResponse = 0;
-unsigned long lastPID = 0;
+unsigned long lastGetSent = 0;
+bool waitingForResponse = false;
 
-// =============================
-// VARIABLES FROM SUPERVISOR
-// =============================
+// Supervisor-controlled variables
 double actualTemp = 0.0;
 double setpoint = 0.0;
-double output = 0;
 double kp = 2.0, ki = 0.5, kd = 0.0;
 int machineState = 0;   // 0 = IDLE, 1 = ACTIVE
-int outMin = 0;
-int outMax = 255;
+int outMin = 0, outMax = 255;
 
-// =============================
 // PID
-// =============================
+double output = 0;
 PID pitController(&actualTemp, &output, &setpoint, kp, ki, kd, DIRECT);
 
-// =============================
-// SERIAL BUFFER
-// =============================
+// Serial parsing
 String incomingLine = "";
 
-// NEW simplified states
-enum {
-    STATE_IDLE = 0,
-    STATE_ACTIVE = 1
-};
-
 // =============================
-// SETUP
+// HELPER FUNCTIONS
 // =============================
-void setup() {
-    Serial.begin(115200);
-    pinMode(FAN_PIN, OUTPUT);
-
-    setPWM_30Hz();
-
-    pitController.SetMode(AUTOMATIC);
-    pitController.SetOutputLimits(outMin, outMax);
-    pitController.SetSampleTime(PID_INTERVAL_MS);  // force 10 Hz internal timing
+void setPWM_30Hz() {
+    // Fast PWM 8-bit, prescaler = 1024
+    TCCR1A = _BV(COM1A1) | _BV(WGM10);
+    TCCR1B = _BV(WGM12) | _BV(CS12) | _BV(CS10);
 }
 
-// =============================
-// MAIN LOOP
-// =============================
-void loop() {
-    unsigned long now = millis();
-
-    // Poll supervisor at fixed interval
-    if (now - lastPoll >= POLL_INTERVAL_MS) {
-        Serial.println("GET");
-        lastPoll = now;
-    }
-
-    // Read any incoming supervisor data
-    readSupervisorData();
-
-    // Default: zero output if failsafe triggered or IDLE
-    if (machineState == STATE_IDLE || now - lastSupervisorResponse > SUPERVISOR_TIMEOUT_MS) {
-        output = 0;
-    } 
-    // ACTIVE state → run PID at 10 Hz
-    else if (now - lastPID >= PID_INTERVAL_MS) {
-        pitController.Compute();
-        lastPID = now;
-    }
-
-    // Always write PWM, even if output hasn't changed
-    analogWrite(FAN_PIN, (int)output);
-}
-
-// =============================
-// READ SUPERVISOR RESPONSE
-// =============================
-void readSupervisorData() {
-    while (Serial.available()) {
-        char c = Serial.read();
-
-        if (c == '\n') {
-            processLine(incomingLine);
-            incomingLine = "";
-        } else {
-            incomingLine += c;
-        }
-    }
+void sendGET() {
+    Serial.println("GET");
+    waitingForResponse = true;
+    lastGetSent = millis();
 }
 
 void processLine(String line) {
     line.trim();
-
     if (line == "END") {
         lastSupervisorResponse = millis();
+        waitingForResponse = false;
         return;
     }
 
     int eq = line.indexOf('=');
-    if (eq == -1) return;
+    if (eq < 0) return;
 
     String key = line.substring(0, eq);
     String val = line.substring(eq + 1);
@@ -132,4 +66,56 @@ void processLine(String line) {
 
     pitController.SetTunings(kp, ki, kd);
     pitController.SetOutputLimits(outMin, outMax);
+}
+
+void readSupervisorData() {
+    while (Serial.available()) {
+        char c = Serial.read();
+        if (c == '\n') {
+            processLine(incomingLine);
+            incomingLine = "";
+        } else {
+            incomingLine += c;
+        }
+    }
+}
+
+// =============================
+// SETUP
+// =============================
+void setup() {
+    Serial.begin(115200);
+    pinMode(FAN_PIN, OUTPUT);
+    setPWM_30Hz();
+
+    pitController.SetMode(AUTOMATIC);
+    pitController.SetOutputLimits(outMin, outMax);
+}
+
+// =============================
+// MAIN LOOP
+// =============================
+void loop() {
+    unsigned long now = millis();
+
+    // Process any supervisor input
+    readSupervisorData();
+
+    // Check if timeout has occurred
+    if (waitingForResponse && (now - lastGetSent > SUPERVISOR_TIMEOUT_MS)) {
+        waitingForResponse = false;
+        machineState = 0; // fallback to idle
+    }
+
+    // Send GET if allowed (conversation idle and interval elapsed)
+    if (!waitingForResponse && (now - lastGetSent >= GET_INTERVAL_MS)) {
+        sendGET();
+    }
+
+    // Compute PID if machine active
+    if (machineState == 1) pitController.Compute();
+    else output = 0;
+
+    // Update PWM regardless
+    analogWrite(FAN_PIN, (int)output);
 }
