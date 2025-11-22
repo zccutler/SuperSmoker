@@ -63,8 +63,9 @@ machine_state = MachineState.IDLE
 
 # Debug Logger
 debug_enabled = cfg.get("debug", "False") == "True"
+logger = None
 if debug_enabled:
-    logger = DebugLogger(cfg)
+    logger = ssdebug(cfg)   # instantiate the debug logger class
 
 # ==============================
 # Thermocouple Thread
@@ -145,7 +146,6 @@ while True:
         line = ser.readline().decode("ascii", errors="ignore").strip()
         if line == "GET":
             cfg = load_config()  # hot reload
-            debug_logger = ssdebug(cfg)
             update_machine_state()
             send_data()
             if debug_enabled:
