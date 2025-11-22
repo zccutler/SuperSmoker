@@ -10,6 +10,26 @@ import atexit
 
 from ss_debug_module import ssdebug  # separate module
 
+# -------------------------------
+# MAD / trimmed mean helpers
+# -------------------------------
+def median_absolute_deviation(data, median_val=None):
+    if not data:
+        return 0.0
+    if median_val is None:
+        median_val = statistics.median(data)
+    return statistics.median([abs(x - median_val) for x in data])
+
+def trimmed_mean(data, trim_fraction):
+    if not data:
+        return 0.0
+    n = len(data)
+    k = int(math.floor(trim_fraction * n))
+    if 2 * k >= n:
+        return statistics.mean(data)
+    s = sorted(data)
+    return statistics.mean(s[k:n - k])
+
 # ==============================
 # Load Config
 # ==============================
@@ -63,9 +83,8 @@ machine_state = MachineState.IDLE
 
 # Debug Logger
 debug_enabled = cfg.get("debug", "False") == "True"
-logger = None
 if debug_enabled:
-    logger = ssdebug(cfg)   # instantiate the debug logger class
+    logger = ssdebug(cfg)
 
 # ==============================
 # Thermocouple Thread
@@ -75,22 +94,36 @@ stop_event = Event()
 
 def thermocouple_loop():
     global ema_temp, actualTemp
+    window_seconds = 0.5
     sleep_interval = 1.0 / SAMPLE_RATE
+
     while not stop_event.is_set():
-        try:
-            data = bus.read_i2c_block_data(I2C_ADDR, 1, 2)
-            raw = (data[0] << 8) | data[1]
-            temp = slope * raw + offset
+        samples = []
+        start = time.perf_counter()
+        while time.perf_counter() - start < window_seconds:
+            try:
+                data = bus.read_i2c_block_data(I2C_ADDR, 1, 2)
+                raw = (data[0] << 8) | data[1]
+                samples.append(slope * raw + offset)
+            except Exception:
+                pass
+            time.sleep(sleep_interval)
 
-            # EMA
-            if ema_temp is None:
-                ema_temp = temp
+        if len(samples) >= MIN_SAMPLES:
+            median_val = statistics.median(samples)
+            mad = median_absolute_deviation(samples, median_val)
+            if mad > 0:
+                survivors = [x for x in samples if abs(x - median_val) <= MAD_THRESHOLD * mad]
             else:
-                ema_temp = 0.25 * temp + 0.75 * ema_temp
-            actualTemp = ema_temp
+                survivors = samples
+            clean_avg = trimmed_mean(survivors, TRIM_FRACTION)
 
-        except Exception:
-            pass
+            # EMA smoothing
+            if ema_temp is None:
+                ema_temp = clean_avg
+            else:
+                ema_temp = 0.25 * clean_avg + 0.75 * ema_temp
+            actualTemp = ema_temp
 
         time.sleep(sleep_interval)
 
