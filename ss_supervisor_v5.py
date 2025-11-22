@@ -183,27 +183,29 @@ therm_thread.start()
 atexit.register(lambda: stop_event.set())
 
 # ==============================
-# Lid open/close detection
+# Machine State Logic
 # ==============================
-LID_DROP_THRESHOLD = 15.0  # degC drop to consider lid open
-lid_open = False
-lid_temp_reference = None
 
 def update_machine_state():
-    global lid_open, machine_state, lid_temp_reference
-    if lid_open:
-        # check if temperature is rising back → lid closed
-        if actualTemp is not None and lid_temp_reference is not None:
-            if actualTemp > lid_temp_reference + 2.0:  # sustained rise
-                lid_open = False
-                machine_state = MachineState.ACTIVE
+    """
+    Sets the machine_state based on core logic:
+    - ACTIVE if system is below setpoint or currently running
+    - IDLE only if explicitly configured or stopped
+    """
+    global machine_state
+
+    # Sanity check
+    if actualTemp is None or setpoint is None:
+        # If temperature reading is missing, fallback to IDLE
+        machine_state = MachineState.IDLE
+        return
+
+    # Core active/idle decision:
+    # ACTIVE if temperature below setpoint, otherwise IDLE
+    if actualTemp < setpoint:
+        machine_state = MachineState.ACTIVE
     else:
-        # detect lid open
-        if actualTemp is not None and setpoint is not None:
-            if actualTemp < setpoint - 30.0:  # rapid drop triggers lid open
-                lid_open = True
-                lid_temp_reference = actualTemp
-                machine_state = MachineState.IDLE
+        machine_state = MachineState.IDLE
 
 # ==============================
 # Serial GET Handler
