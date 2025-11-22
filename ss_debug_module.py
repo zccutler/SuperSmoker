@@ -44,8 +44,8 @@ class ssdebug:
         if not self.buffer:
             return
         # Ensure /var/log exists
-        os.makedirs("/var/log", exist_ok=True)
-        dest_file = f"/var/log/{os.path.basename(self.filename)}"
+        os.makedirs("$HOME/ss_debug_log", exist_ok=True)
+        dest_file = f"/$HOME/ss_debug_log/{os.path.basename(self.filename)}"
         with open(dest_file, "a", newline="") as f:
             writer = csv.writer(f)
             writer.writerows(self.buffer)
