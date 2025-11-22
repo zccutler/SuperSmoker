@@ -68,36 +68,26 @@ void setup() {
 void loop() {
     unsigned long now = millis();
 
-    // Poll supervisor
+    // Poll supervisor at fixed interval
     if (now - lastPoll >= POLL_INTERVAL_MS) {
         Serial.println("GET");
         lastPoll = now;
     }
 
-    // Read serial responses
+    // Read any incoming supervisor data
     readSupervisorData();
 
-    // Failsafe
-    if (now - lastSupervisorResponse > SUPERVISOR_TIMEOUT_MS) {
-        analogWrite(FAN_PIN, 0);
-        return;
-    }
-
-    // Apply the simplified state model
-    if (machineState == STATE_IDLE) {
-        // Suspend PID influence completely
+    // Default: zero output if failsafe triggered or IDLE
+    if (machineState == STATE_IDLE || now - lastSupervisorResponse > SUPERVISOR_TIMEOUT_MS) {
         output = 0;
-        analogWrite(FAN_PIN, 0);
-        return; 
-    }
-
-    // ACTIVE state → run PID at exactly 10 Hz
-    if (now - lastPID >= PID_INTERVAL_MS) {
-        pitController.Compute();  
+    } 
+    // ACTIVE state → run PID at 10 Hz
+    else if (now - lastPID >= PID_INTERVAL_MS) {
+        pitController.Compute();
         lastPID = now;
     }
 
-    // Write fan output
+    // Always write PWM, even if output hasn't changed
     analogWrite(FAN_PIN, (int)output);
 }
 
