@@ -87,6 +87,57 @@ if debug_enabled:
     logger = ssdebug(cfg)
 
 # ==============================
+# Dynamic Config Reload (inotify)
+# ==============================
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+import threading
+
+class ConfigChangeHandler(FileSystemEventHandler):
+    def __init__(self, path, reload_callback):
+        self.path = path
+        self.reload_callback = reload_callback
+        super().__init__()
+
+    def on_modified(self, event):
+        if event.src_path.endswith(self.path):
+            try:
+                self.reload_callback()
+                print(f"[INFO] Config reloaded from {self.path}")
+            except Exception as e:
+                print(f"[ERROR] Failed to reload config: {e}")
+
+def reload_config():
+    global cfg, setpoint, kp, ki, kd, outmin, outmax, I2C_ADDR, I2C_BUS, SAMPLE_RATE
+    cfg = load_config("/etc/supersmoker.conf")  # adjust path if needed
+
+    # Reload runtime parameters
+    setpoint = float(cfg["setpoint"])
+    kp = float(cfg["kp"])
+    ki = float(cfg["ki"])
+    kd = float(cfg["kd"])
+    outmin = int(cfg["outmin"])
+    outmax = int(cfg["outmax"])
+
+    # Reload I2C config if needed
+    I2C_ADDR = int(cfg["i2c_addr"], 16)
+    I2C_BUS = int(cfg["i2c_bus"])
+    SAMPLE_RATE = float(cfg["sample_rate"])
+
+# Initialize watchdog observer
+config_path = "supersmoker.conf"  # relative filename
+observer = Observer()
+event_handler = ConfigChangeHandler(config_path, reload_config)
+observer.schedule(event_handler, path="/etc", recursive=False)  # adjust to actual folder
+observer_thread = threading.Thread(target=observer.start, daemon=True)
+observer_thread.start()
+
+# Ensure observer stops on exit
+import atexit
+atexit.register(observer.stop)
+atexit.register(observer.join)
+
+# ==============================
 # Thermocouple Thread
 # ==============================
 actualTemp = 0.0
